@@ -70,6 +70,11 @@
     border: none; padding: 10px 18px; border-radius: 999px; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   #add-btn:hover { filter: brightness(1.1); }
+  .icon-btn {
+    background: transparent; color: var(--grey); border: 1px solid var(--border);
+    padding: 9px 14px; border-radius: 999px; font-size: 13px; cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--gold); color: var(--gold); }
 
   .empty { text-align: center; padding: 80px 20px; border: 1px dashed var(--border); border-radius: 12px; color: var(--grey); }
   .empty .big { font-size: 36px; opacity: .4; }
@@ -189,7 +194,12 @@
 <main>
   <div class="toolbar">
     <div class="filters" id="filters"></div>
-    <button id="add-btn">＋ Add entry</button>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="export-btn" class="icon-btn" title="Export data as a file">⬇ Export</button>
+      <button id="import-btn" class="icon-btn" title="Import data from a file">⬆ Import</button>
+      <input type="file" id="import-file-input" accept="application/json" class="hidden" />
+      <button id="add-btn">＋ Add entry</button>
+    </div>
   </div>
   <div id="grid-container"></div>
 </main>
@@ -304,6 +314,38 @@
     return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   }
 
+  /* ---------- auto-advance upcoming episodes ---------- */
+  function advanceDateByCadence(dateStr, cadence) {
+    var d = new Date(dateStr + "T00:00:00");
+    if (cadence === "daily") d.setDate(d.getDate() + 1);
+    else if (cadence === "weekly") d.setDate(d.getDate() + 7);
+    else if (cadence === "biweekly") d.setDate(d.getDate() + 14);
+    else if (cadence === "monthly") d.setMonth(d.getMonth() + 1);
+    else return null;
+    return d.toISOString().slice(0, 10);
+  }
+
+  function advanceAllSeasons() {
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var changed = false;
+    entries.forEach(function (entry) {
+      if (entry.type !== "show" || !entry.seasons) return;
+      entry.seasons.forEach(function (season) {
+        if (!season.upcomingDate || !season.cadence || season.cadence === "none") return;
+        var guard = 0;
+        while (season.upcomingDate && season.upcomingDate <= todayStr && guard < 500) {
+          season.totalEpisodes = String((Number(season.totalEpisodes) || 0) + 1);
+          var next = advanceDateByCadence(season.upcomingDate, season.cadence);
+          if (!next) break;
+          season.upcomingDate = next;
+          changed = true;
+          guard++;
+        }
+      });
+    });
+    if (changed) saveEntries();
+  }
+
   /* ---------- tabs ---------- */
   function renderTabs() {
     var el = document.getElementById("tabs");
@@ -399,289 +441,4 @@
           totalAll += Number(s.totalEpisodes) || 0;
           watchedAll += Number(s.watchedEpisodes) || 0;
         });
-        var overallPct = totalAll ? Math.min(100, (watchedAll / totalAll) * 100) : 0;
-
-        html += '<div class="overall-progress">';
-        html += '<div class="progress-row"><span>Overall: ' + watchedAll + '/' + totalAll + ' episodes</span><span>' + Math.round(overallPct) + '%</span></div>';
-        html += '<div class="progress-bar"><div class="progress-fill" style="width:' + overallPct + '%"></div></div>';
-        html += '</div>';
-
-        html += '<div class="season-list">';
-        entry.seasons.forEach(function (s, sIdx) {
-          var total = Number(s.totalEpisodes) || 0;
-          var watched = Number(s.watchedEpisodes) || 0;
-          var pct = total ? Math.min(100, (watched / total) * 100) : 0;
-          html += '<div class="season-row">';
-          html += '<div class="progress-row"><span>Season ' + escapeHtml(s.number) + ': ' + watched + '/' + total + '</span><span>' + Math.round(pct) + '%</span></div>';
-          html += '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
-          html += '<div class="season-counter">';
-          html += '<button type="button" class="card-round-btn" data-card-ep-minus="' + entry.id + '" data-season-idx="' + sIdx + '"' + (watched <= 0 ? ' disabled' : '') + ' title="Unwatch episode">–</button>';
-          html += '<span class="count-label">' + watched + (total ? ' / ' + total : '') + ' watched</span>';
-          html += '<button type="button" class="card-round-btn" data-card-ep-plus="' + entry.id + '" data-season-idx="' + sIdx + '"' + (total && watched >= total ? ' disabled' : '') + ' title="Mark episode watched">+</button>';
-          html += '</div>';
-          if (s.upcomingDate) {
-            html += '<div class="season-next">Next: ' + formatDateWithDay(s.upcomingDate) + '</div>';
-          }
-          html += '</div>';
-        });
-        html += '</div>';
-      }
-
-      html += '<div class="stars">' + starsHtml(entry.rating) + '</div>';
-      if (entry.notes) {
-        html += '<p class="notes">' + escapeHtml(entry.notes) + '</p>';
-      }
-      html += '<div class="card-footer">';
-      html += '<span class="badge" style="background:' + status.color + '22;color:' + status.color + '">' + status.label + '</span>';
-      html += '<button type="button" class="link-btn" data-edit="' + entry.id + '">Edit</button>';
-      html += '</div>';
-      if (entry.dateWatched) {
-        html += '<div class="date-tag" style="margin-top:8px;">Started ' + escapeHtml(entry.dateWatched) + '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-    container.innerHTML = html;
-
-    container.querySelectorAll("[data-edit]").forEach(function (btn) {
-      btn.addEventListener("click", function () { openModal(btn.getAttribute("data-edit")); });
-    });
-    container.querySelectorAll("[data-delete]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete");
-        if (!confirm("Delete this entry?")) return;
-        entries = entries.filter(function (e) { return e.id !== id; });
-        saveEntries();
-        renderAll();
-      });
-    });
-    container.querySelectorAll("[data-card-ep-plus]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        adjustSeasonWatched(btn.getAttribute("data-card-ep-plus"), Number(btn.getAttribute("data-season-idx")), 1);
-      });
-    });
-    container.querySelectorAll("[data-card-ep-minus]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        adjustSeasonWatched(btn.getAttribute("data-card-ep-minus"), Number(btn.getAttribute("data-season-idx")), -1);
-      });
-    });
-  }
-
-  function adjustSeasonWatched(entryId, seasonIdx, delta) {
-    var entry = entries.filter(function (e) { return e.id === entryId; })[0];
-    if (!entry || !entry.seasons || !entry.seasons[seasonIdx]) return;
-    var season = entry.seasons[seasonIdx];
-    var total = Number(season.totalEpisodes) || 0;
-    var current = Number(season.watchedEpisodes) || 0;
-    var next = current + delta;
-    if (next < 0) next = 0;
-    if (total && next > total) next = total;
-    season.watchedEpisodes = String(next);
-    saveEntries();
-    renderGrid();
-  }
-
-  function renderAll() {
-    renderTabs();
-    renderFilters();
-    renderStats();
-    renderGrid();
-  }
-
-  /* ---------- modal: seasons editor ---------- */
-  function renderSeasonsList() {
-    var el = document.getElementById("seasons-list");
-    if (formSeasons.length === 0) {
-      el.innerHTML = '<p style="font-size:12px;color:#7A7A85;margin:0 0 4px;">No seasons added yet.</p>';
-      return;
-    }
-    var html = "";
-    formSeasons.forEach(function (s, idx) {
-      html += '<div class="season-block" data-suid="' + s.uid + '">';
-      html += '<div class="season-block-header"><b>Season</b><button type="button" class="remove-season-btn" data-remove-season="' + s.uid + '">Remove</button></div>';
-      html += '<label>Season number</label>';
-      html += '<input type="text" data-field="number" data-suid="' + s.uid + '" value="' + escapeHtml(s.number) + '" placeholder="e.g. 1" />';
-      html += '<label>Total episodes</label>';
-      html += '<input type="number" min="0" data-field="totalEpisodes" data-suid="' + s.uid + '" value="' + escapeHtml(s.totalEpisodes) + '" placeholder="e.g. 10" />';
-      html += '<label>Episodes watched</label>';
-      html += '<div class="ep-counter">';
-      html += '<button type="button" class="round-btn" data-ep-minus="' + s.uid + '">–</button>';
-      html += '<input type="number" min="0" data-field="watchedEpisodes" data-suid="' + s.uid + '" value="' + escapeHtml(s.watchedEpisodes) + '" />';
-      html += '<button type="button" class="round-btn" data-ep-plus="' + s.uid + '">+</button>';
-      html += '</div>';
-      html += '<label>Upcoming episode date</label>';
-      html += '<input type="date" data-field="upcomingDate" data-suid="' + s.uid + '" value="' + escapeHtml(s.upcomingDate) + '" />';
-      html += '</div>';
-    });
-    el.innerHTML = html;
-
-    el.querySelectorAll("[data-field]").forEach(function (input) {
-      input.addEventListener("input", function () {
-        var suid = input.getAttribute("data-suid");
-        var field = input.getAttribute("data-field");
-        var season = formSeasons.filter(function (s) { return s.uid === suid; })[0];
-        if (season) season[field] = input.value;
-      });
-    });
-    el.querySelectorAll("[data-remove-season]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var suid = btn.getAttribute("data-remove-season");
-        formSeasons = formSeasons.filter(function (s) { return s.uid !== suid; });
-        renderSeasonsList();
-      });
-    });
-    el.querySelectorAll("[data-ep-minus]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var suid = btn.getAttribute("data-ep-minus");
-        var season = formSeasons.filter(function (s) { return s.uid === suid; })[0];
-        if (season) {
-          season.watchedEpisodes = String(Math.max(0, (Number(season.watchedEpisodes) || 0) - 1));
-          renderSeasonsList();
-        }
-      });
-    });
-    el.querySelectorAll("[data-ep-plus]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var suid = btn.getAttribute("data-ep-plus");
-        var season = formSeasons.filter(function (s) { return s.uid === suid; })[0];
-        if (season) {
-          var total = Number(season.totalEpisodes);
-          var next = (Number(season.watchedEpisodes) || 0) + 1;
-          season.watchedEpisodes = String(total ? Math.min(total, next) : next);
-          renderSeasonsList();
-        }
-      });
-    });
-  }
-
-  function addSeason() {
-    var nextNumber = formSeasons.length + 1;
-    formSeasons.push({ uid: uid(), number: String(nextNumber), totalEpisodes: "", watchedEpisodes: "", upcomingDate: "" });
-    renderSeasonsList();
-  }
-
-  /* ---------- modal: rating ---------- */
-  function renderRatingInput(containerId, current, onSet) {
-    var el = document.getElementById(containerId);
-    el.innerHTML = starsHtml(current, 22);
-    Array.prototype.forEach.call(el.children, function (star, i) {
-      star.addEventListener("click", function () { onSet(i + 1); });
-    });
-  }
-
-  function populateSelects() {
-    var platformSel = document.getElementById("f-platform");
-    platformSel.innerHTML = PLATFORMS.map(function (p) { return '<option value="' + p.name + '">' + p.name + '</option>'; }).join("");
-    var statusSel = document.getElementById("f-status");
-    statusSel.innerHTML = Object.keys(STATUS).map(function (key) { return '<option value="' + key + '">' + STATUS[key].label + '</option>'; }).join("");
-  }
-
-  function renderMovieRating() {
-    renderRatingInput("movie-rating-input", movieRating, function (n) {
-      movieRating = movieRating === n ? 0 : n;
-      renderMovieRating();
-    });
-  }
-  function renderShowRating() {
-    renderRatingInput("show-rating-input", showRating, function (n) {
-      showRating = showRating === n ? 0 : n;
-      renderShowRating();
-    });
-  }
-
-  /* ---------- modal open/close/submit ---------- */
-  function openModal(id) {
-    editingId = id || null;
-    var entry = id ? entries.filter(function (e) { return e.id === id; })[0] : null;
-    var kind = entry ? entry.type : (activeTab === "tv" ? "show" : "movie");
-
-    document.getElementById("modal-title").innerText = entry ? "Edit stub" : "New stub";
-    document.getElementById("modal-kind").innerText = kind === "show" ? "TV Show" : "Movie";
-    document.getElementById("submit-btn").innerText = entry ? "Save changes" : "Add to watchlist";
-
-    document.getElementById("f-title").value = entry ? entry.title : "";
-    document.getElementById("f-platform").value = entry ? entry.platform : "Netflix";
-    document.getElementById("f-status").value = entry ? entry.status : "watching";
-    document.getElementById("f-date-watched").value = entry ? (entry.dateWatched || "") : new Date().toISOString().slice(0, 10);
-    document.getElementById("f-notes").value = entry ? (entry.notes || "") : "";
-
-    document.getElementById("movie-fields").classList.toggle("hidden", kind !== "movie");
-    document.getElementById("show-fields").classList.toggle("hidden", kind !== "show");
-    document.getElementById("entry-form").setAttribute("data-kind", kind);
-
-    if (kind === "movie") {
-      movieRating = entry ? (entry.rating || 0) : 0;
-      renderMovieRating();
-    } else {
-      showRating = entry ? (entry.rating || 0) : 0;
-      formSeasons = entry && entry.seasons ? entry.seasons.map(function (s) {
-        return { uid: uid(), number: s.number, totalEpisodes: s.totalEpisodes, watchedEpisodes: s.watchedEpisodes, upcomingDate: s.upcomingDate };
-      }) : [];
-      if (formSeasons.length === 0) addSeason();
-      renderSeasonsList();
-      renderShowRating();
-    }
-
-    document.getElementById("modal-overlay").classList.add("open");
-  }
-
-  function closeModal() {
-    document.getElementById("modal-overlay").classList.remove("open");
-    editingId = null;
-  }
-
-  function submitForm(e) {
-    e.preventDefault();
-    var title = document.getElementById("f-title").value.trim();
-    if (!title) return;
-    var kind = document.getElementById("entry-form").getAttribute("data-kind");
-
-    var data = {
-      id: editingId || uid(),
-      type: kind,
-      title: title,
-      platform: document.getElementById("f-platform").value,
-      status: document.getElementById("f-status").value,
-      dateWatched: document.getElementById("f-date-watched").value,
-      notes: document.getElementById("f-notes").value
-    };
-
-    if (kind === "movie") {
-      data.rating = movieRating;
-    } else {
-      data.rating = showRating;
-      data.seasons = formSeasons.map(function (s) {
-        return {
-          number: s.number,
-          totalEpisodes: s.totalEpisodes,
-          watchedEpisodes: s.watchedEpisodes,
-          upcomingDate: s.upcomingDate
-        };
-      });
-    }
-
-    if (editingId) {
-      entries = entries.map(function (e2) { return e2.id === editingId ? data : e2; });
-    } else {
-      entries.unshift(data);
-    }
-    saveEntries();
-    closeModal();
-    renderAll();
-  }
-
-  /* ---------- init ---------- */
-  document.addEventListener("DOMContentLoaded", function () {
-    loadEntries();
-    populateSelects();
-    renderAll();
-
-    document.getElementById("add-btn").addEventListener("click", function () { openModal(null); });
-    document.getElementById("close-modal").addEventListener("click", closeModal);
-    document.getElementById("modal-overlay").addEventListener("click", function (e) { if (e.target === this) closeModal(); });
-    document.getElementById("entry-form").addEventListener("submit", submitForm);
-    document.getElementById("add-season-btn").addEventListener("click", addSeason);
-  });
-</script>
-</body>
-</html>
+        var overallPct = totalAll 
